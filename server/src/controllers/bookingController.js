@@ -2,8 +2,19 @@ import { Booking } from '../models/Booking.js';
 
 // TODO: write a validation schema for create/update per README.md section 2.
 
-// TODO: per README.md section 4, you will need a way to detect whether a
-// proposed booking conflicts with an existing one on the same room.
+async function hasBookingConflict({ roomNumber, startDate, endDate, excludeId }) {
+  const query = {
+    roomNumber,
+    startDate: { $lt: endDate },
+    endDate: { $gt: startDate }
+  };
+
+  if (excludeId) {
+    query._id = { $ne: excludeId };
+  }
+
+  return Booking.exists(query);
+}
 
 // GET /api/bookings
 // TODO: implement per README.md section 3.
@@ -35,21 +46,19 @@ export async function getBooking(req, res, next) {
 // TODO: implement per README.md sections 3 and 4.
 export async function createBooking(req, res, next) {
   try {
-    if( req.body.startDate >= req.body.endDate){
-      res.status(409).json({message : "start date should be less than end date"})
-    }
-    
-    const bookings = await Booking.find({
-      roomNumber: req.body.roomNumber,
-      startDate: { $lt: req.body.endDate },
-      endDate: { $gt: req.body.startDate }
-    });
-    if (bookings.length > 0) {
-      return res.status(400).json({ message: "Booking conflict with existing booking" });
-    }
-    res.status(201).json(await Booking.create(req.body));
+    const { roomNumber, startDate, endDate } = req.body;
+    const start = new Date(startDate);
+    const end = new Date(endDate);
 
-    
+    if (!roomNumber || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start >= end) {
+      return res.status(400).json({ message: 'startDate must be before endDate and roomNumber is required' });
+    }
+
+    if (await hasBookingConflict({ roomNumber, startDate: start, endDate: end })) {
+      return res.status(409).json({ message: 'Booking conflict with existing booking' });
+    }
+
+    res.status(201).json(await Booking.create(req.body));
   } catch (err) { next(err); }
 }
 
@@ -57,18 +66,32 @@ export async function createBooking(req, res, next) {
 // TODO: implement per README.md sections 3, 4, and 5.
 export async function updateBooking(req, res, next) {
   try {
-    if( req.body.startDate >= req.body.endDate){
-      res.status(409).json({message : "start date should be less than end date"})
+    const booking = await Booking.findById(req.params.id);
+    if (!booking) {
+      return res.status(404).json({ message: 'Booking not found' });
     }
-    const bookings = await Booking.find({
-      roomNumber: req.body.roomNumber,
-      startDate: { $lt: req.body.endDate },
-      endDate: { $gt: req.body.startDate }
-    });
-    if (bookings.length > 0) {
-      return res.status(400).json({ message: "Booking conflict with existing booking" });
+
+    const updatedBooking = { ...booking.toObject(), ...req.body };
+    const start = new Date(updatedBooking.startDate);
+    const end = new Date(updatedBooking.endDate);
+
+    if (!updatedBooking.roomNumber || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start >= end) {
+      return res.status(400).json({ message: 'startDate must be before endDate and roomNumber is required' });
     }
-    res.json(await Booking.findByIdAndUpdate(req.params.id, req.body, { new: true }));
+
+    if (await hasBookingConflict({
+      roomNumber: updatedBooking.roomNumber,
+      startDate: start,
+      endDate: end,
+      excludeId: booking._id
+    })) {
+      return res.status(409).json({ message: 'Booking conflict with existing booking' });
+    }
+
+    booking.set(req.body);
+    await booking.save();
+    await booking.populate('bookedBy', 'name email');
+    res.json(booking);
   } catch (err) { next(err); }
 }
 
